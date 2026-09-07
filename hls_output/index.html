@@ -2,20 +2,23 @@
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>MP3 数据提取器</title>
+    <title>下载 MP3</title>
     <style>
-        body { font-family: Arial; background: #0a0a0a; color: #ccc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .container { background: #1a1a1a; padding: 30px; border-radius: 12px; max-width: 600px; width: 100%; }
-        h2 { color: #fff; margin-top: 0; }
-        input[type="file"] { width: 100%; padding: 10px; background: #2a2a2a; border: 1px solid #444; color: #fff; border-radius: 4px; cursor: pointer; }
-        button { margin-top: 15px; padding: 10px 30px; background: #4CAF50; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
-        button:hover { background: #45a049; }
-        #status { margin-top: 15px; color: #aaa; font-family: monospace; }
-        #log { margin-top: 10px; max-height: 200px; overflow-y: auto; font-size: 12px; background: #111; padding: 10px; border-radius: 4px; }
+        body { font-family: Arial; background: #0a0a0a; color: #ccc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: #1a1a1a; padding: 40px; border-radius: 12px; text-align: center; }
+        a { display: inline-block; margin-top: 20px; padding: 12px 30px; background: #4CAF50; color: #fff; text-decoration: none; border-radius: 4px; font-size: 18px; }
+        a:hover { background: #45a049; }
+        .info { margin-top: 20px; color: #888; font-size: 14px; }
         .key { color: #ffd700; }
     </style>
 </head>
 <body>
-<a href="./audio.mp3">mp3 download</a>
+<div class="container">
+    <h2>📥 下载 MP3 文件</h2>
+    <p>点击下方链接下载 <code>audio.mp3</code>，然后使用提取器还原数据。</p>
+    <a href="audio.mp3" download>⬇ 下载 audio.mp3</a>
+    <div class="info">🔑 XOR 密钥: <span class="key">0x5A</span> (90)</div>
+    <div class="info">下载后请使用 <code>extractor.html</code> 提取</div>
+</div>
 </body>
 </html>
