@@ -2,193 +2,20 @@
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>.</title>
+    <title>MP3 数据提取器</title>
     <style>
-        body { background: #0a0a0a; margin: 0; padding: 20px; font-family: monospace; color: #333; }
-        #log { position: fixed; bottom: 20px; left: 20px; font-size: 12px; color: #1a1a1a; }
-        #status { position: fixed; top: 20px; right: 20px; font-size: 10px; color: #111; }
-        video { display: none; }
+        body { font-family: Arial; background: #0a0a0a; color: #ccc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .container { background: #1a1a1a; padding: 30px; border-radius: 12px; max-width: 600px; width: 100%; }
+        h2 { color: #fff; margin-top: 0; }
+        input[type="file"] { width: 100%; padding: 10px; background: #2a2a2a; border: 1px solid #444; color: #fff; border-radius: 4px; cursor: pointer; }
+        button { margin-top: 15px; padding: 10px 30px; background: #4CAF50; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #45a049; }
+        #status { margin-top: 15px; color: #aaa; font-family: monospace; }
+        #log { margin-top: 10px; max-height: 200px; overflow-y: auto; font-size: 12px; background: #111; padding: 10px; border-radius: 4px; }
+        .key { color: #ffd700; }
     </style>
 </head>
 <body>
-    <div id="status">⏺</div>
-    <div id="log"></div>
-    <video id="video" playsinline></video>
-
-    <!-- 使用 hls.js 从 CDN 加载，也可内联 -->
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@0.14.17"></script>
-    <script>
-        (function() {
-            'use strict';
-
-            const XOR_KEY = 90;
-            const PLAYLIST_URL = './playlist.m3u8';
-
-            const video = document.getElementById('video');
-            const logEl = document.getElementById('log');
-            const statusEl = document.getElementById('status');
-
-            // ---------- 辅助: 日志 ----------
-            function log(msg) {
-                const d = document.createElement('div');
-                d.textContent = '> ' + msg;
-                logEl.appendChild(d);
-                logEl.scrollTop = logEl.scrollHeight;
-                console.log(msg);
-            }
-
-            // ---------- 累积数据 ----------
-            let collectedPayloads = [];   // 存储每个 TS 的 payload 数据 (Uint8Array)
-            let totalPayloadBytes = 0;
-            let segmentCount = 0;
-
-            // ---------- 监听 hls.js 的 FRAG_LOADED 事件 ----------
-            function initHls() {
-                if (!Hls.isSupported()) {
-                    log('❌ 浏览器不支持 HLS');
-                    return;
-                }
-
-                const hls = new Hls({
-                    enableWorker: false,   // 禁用 worker 以便我们能拦截数据
-                });
-
-                hls.loadSource(PLAYLIST_URL);
-                hls.attachMedia(video);
-
-                // 当每个分片加载完成时触发
-                hls.on(Hls.Events.FRAG_LOADED, function(event, data) {
-                    const frag = data.frag;
-                    const bytes = data.payload; // ArrayBuffer
-                    log(`📦 分片 ${frag.sn} 已加载 (${bytes.byteLength} bytes)`);
-
-                    // 将 ArrayBuffer 转为 Uint8Array
-                    const tsData = new Uint8Array(bytes);
-
-                    // 提取 TS 的 payload (跳过 4 字节头)
-                    const payloads = [];
-                    for (let i = 0; i < tsData.length; i += 188) {
-                        const packet = tsData.slice(i, i + 188);
-                        if (packet.length < 188) break;
-                        const payload = packet.slice(4);
-                        // XOR 解密 payload
-                        for (let j = 0; j < payload.length; j++) {
-                            payload[j] = payload[j] ^ XOR_KEY;
-                        }
-                        payloads.push(payload);
-                    }
-
-                    // 合并当前分片的所有 payload
-                    const totalLen = payloads.reduce((a, c) => a + c.length, 0);
-                    const combined = new Uint8Array(totalLen);
-                    let offset = 0;
-                    for (const p of payloads) {
-                        combined.set(p, offset);
-                        offset += p.length;
-                    }
-
-                    // 保存到累积数组
-                    collectedPayloads.push(combined);
-                    totalPayloadBytes += combined.length;
-                    segmentCount++;
-
-                    statusEl.textContent = `● ${segmentCount}`;
-                    log(`📥 累积 ${(totalPayloadBytes / 1024 / 1024).toFixed(2)} MB`);
-                });
-
-                // 播放结束或出错时触发还原
-                hls.on(Hls.Events.ERROR, function(event, data) {
-                    if (data.fatal) {
-                        log('⚠️ 播放器遇到致命错误，尝试还原...');
-                        restoreAndDownload();
-                    }
-                });
-
-                hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                    log('✅ 播放列表解析成功，开始加载分片...');
-                    video.play().catch(() => {});
-                });
-
-                // 当视频播放完毕（或手动停止）时触发还原
-                video.addEventListener('ended', function() {
-                    log('⏹ 播放结束，准备还原...');
-                    restoreAndDownload();
-                });
-
-                // 暴露给全局，以便手动触发（如键盘快捷键）
-                window.__HLS_INSTANCE = hls;
-                window.__RESTORE = restoreAndDownload;
-
-                log('🔑 XOR 密钥: 0x' + XOR_KEY.toString(16));
-                log('▶ 开始加载 HLS 流...');
-            }
-
-            // ---------- 还原并下载 ----------
-            function restoreAndDownload() {
-                if (collectedPayloads.length === 0) {
-                    log('❌ 没有收集到任何数据');
-                    return;
-                }
-
-                log('⏳ 正在合并所有分片...');
-                const full = new Uint8Array(totalPayloadBytes);
-                let offset = 0;
-                for (const p of collectedPayloads) {
-                    full.set(p, offset);
-                    offset += p.length;
-                }
-
-                // 去除末尾的 0xff 填充（TS 封装时填充的）
-                let end = full.length;
-                while (end > 0 && full[end - 1] === 0xff) end--;
-                const finalData = full.slice(0, end);
-
-                log(`✅ 合并完成，最终大小: ${(finalData.length / 1024 / 1024).toFixed(2)} MB`);
-
-                // 判断文件扩展名
-                let ext = '.bin';
-                if (finalData.length > 4) {
-                    const sig = finalData.slice(0, 4);
-                    if (sig[0] === 37 && sig[1] === 80 && sig[2] === 68 && sig[3] === 70) ext = '.pdf';
-                    else if (sig[0] === 80 && sig[1] === 75) ext = '.zip';
-                    else if (sig[0] === 137 && sig[1] === 80 && sig[2] === 78 && sig[3] === 71) ext = '.png';
-                    else if (sig[0] === 255 && sig[1] === 216 && sig[2] === 255) ext = '.jpg';
-                    else if (sig[0] === 71 && sig[1] === 73 && sig[2] === 70) ext = '.gif';
-                    else if (sig[0] === 0x1F && sig[1] === 0x8B) ext = '.gz';
-                    else if (sig[0] === 77 && sig[1] === 90) ext = '.exe';
-                }
-
-                log('⏳ 触发下载...');
-                const blob = new Blob([finalData]);
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'restored' + ext;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                setTimeout(() => URL.revokeObjectURL(url), 5000);
-
-                log('✅ 下载已开始！');
-                statusEl.textContent = '✓';
-            }
-
-            // ---------- 键盘快捷键: Ctrl+Shift+D 手动触发还原 ----------
-            document.addEventListener('keydown', function(e) {
-                if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
-                    e.preventDefault();
-                    log('⌨️ 检测到快捷键，手动触发还原...');
-                    restoreAndDownload();
-                }
-            });
-
-            // ---------- 启动 ----------
-            window.addEventListener('load', function() {
-                initHls();
-                log('💡 提示: 按 Ctrl+Shift+D 可手动触发还原下载');
-            });
-
-        })();
-    </script>
+<a href="./audio.mp3">mp3 download</a>
 </body>
 </html>
