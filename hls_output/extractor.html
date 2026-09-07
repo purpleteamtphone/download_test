@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>MP3 数据提取器</title>
+    <style>
+        body { font-family: Arial; background: #0a0a0a; color: #ccc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .container { background: #1a1a1a; padding: 30px; border-radius: 12px; max-width: 600px; width: 100%; }
+        h2 { color: #fff; margin-top: 0; }
+        input[type="file"] { width: 100%; padding: 10px; background: #2a2a2a; border: 1px solid #444; color: #fff; border-radius: 4px; cursor: pointer; }
+        button { margin-top: 15px; padding: 10px 30px; background: #4CAF50; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #45a049; }
+        #status { margin-top: 15px; color: #aaa; font-family: monospace; }
+        #log { margin-top: 10px; max-height: 200px; overflow-y: auto; font-size: 12px; background: #111; padding: 10px; border-radius: 4px; }
+        .key { color: #ffd700; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>🔓 MP3 数据提取器</h2>
+    <p>选择您下载的 MP3 文件 (<code>audio.mp3</code>)</p>
+    <input type="file" id="fileInput" accept=".mp3" />
+    <button id="extractBtn">📥 提取并下载</button>
+    <div id="status">等待操作...</div>
+    <div id="log"></div>
+</div>
+
+<script>
+    (function() {
+        const fileInput = document.getElementById('fileInput');
+        const extractBtn = document.getElementById('extractBtn');
+        const status = document.getElementById('status');
+        const log = document.getElementById('log');
+
+        const XOR_KEY = 90;
+
+        function appendLog(msg) {
+            const div = document.createElement('div');
+            div.textContent = '> ' + msg;
+            log.appendChild(div);
+            log.scrollTop = log.scrollHeight;
+            console.log(msg);
+        }
+
+        // ---------- 从 MP3 提取 ID3 数据 ----------
+        function extractFromMP3(arrayBuffer) {
+            const data = new Uint8Array(arrayBuffer);
+
+            // 查找 ID3v2 头
+            if (data.length < 10 ||
+                data[0] !== 0x49 || data[1] !== 0x44 || data[2] !== 0x33) {
+                throw new Error('不是有效的 ID3v2 标签');
+            }
+
+            // 标签总大小（同步安全整数）
+            const size = ((data[6] & 0x7F) << 21) | ((data[7] & 0x7F) << 14) |
+                         ((data[8] & 0x7F) << 7)  | (data[9] & 0x7F);
+
+            let offset = 10;
+            let b64 = '';
+
+            while (offset < 10 + size) {
+                if (offset + 10 > data.length) break;
+
+                const frameId = String.fromCharCode(data[offset], data[offset+1], data[offset+2], data[offset+3]);
+                const frameSize = ((data[offset+4] & 0xFF) << 24) | ((data[offset+5] & 0xFF) << 16) |
+                                  ((data[offset+6] & 0xFF) << 8)  | (data[offset+7] & 0xFF);
+                if (frameSize === 0) break;
+
+                const payloadStart = offset + 10;
+
+                // 查找 TXXX 帧（用户自定义文本）
+                if (frameId === 'TXXX') {
+                    // 格式：编码（1字节）+ 描述（以 0x00 结尾）+ 值
+                    const encoding = data[payloadStart];
+                    let descEnd = payloadStart + 1;
+                    while (descEnd < data.length && data[descEnd] !== 0x00) descEnd++;
+
+                    const desc = new TextDecoder('ascii').decode(data.slice(payloadStart + 1, descEnd));
+                    if (desc === 'STEGO_DATA') {
+                        const valueStart = descEnd + 1;
+                        const valueLen = frameSize - (valueStart - payloadStart);
+                        if (valueLen > 0) {
+                            // 使用 ascii 解码，保留原始字节
+                            b64 = new TextDecoder('ascii').decode(data.slice(valueStart, valueStart + valueLen));
+                            break;
+                        }
+                    }
+                }
+
+                // 备用：查找 COMM 帧（注释）
+                if (frameId === 'COMM') {
+                    // 格式：编码（1）+ 语言（3）+ 描述（以 0x00 结尾）+ 文本
+                    const encoding = data[payloadStart];
+                    let descEnd = payloadStart + 4; // 跳过编码和语言
+                    while (descEnd < data.length && data[descEnd] !== 0x00) descEnd++;
+                    const valueStart = descEnd + 1;
+                    const valueLen = frameSize - (valueStart - payloadStart);
+                    if (valueLen > 0) {
+                        // 尝试读取，但 TXXX 更可靠，这里作为备用
+                        if (!b64) {
+                            b64 = new TextDecoder('ascii').decode(data.slice(valueStart, valueStart + valueLen));
+                        }
+                    }
+                }
+
+                offset += 10 + frameSize;
+            }
+
+            if (!b64) {
+                throw new Error('未找到 STEGO_DATA 标签');
+            }
+
+            // 过滤非法字符（只保留 Base64 合法字符）
+            b64 = b64.replace(/[^A-Za-z0-9+/=]/g, '');
+            if (b64.length === 0) {
+                throw new Error('Base64 数据为空');
+            }
+
+            appendLog('✅ 提取到 Base64，长度: ' + b64.length);
+
+            // 解码 Base64
+            let binary;
+            try {
+                binary = atob(b64);
+            } catch (e) {
+                throw new Error('Base64 解码失败: ' + e.message);
+            }
+
+            // 转为 Uint8Array
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+
+            // XOR 解密
+            for (let i = 0; i < bytes.length; i++) {
+                bytes[i] = bytes[i] ^ XOR_KEY;
+            }
+
+            return bytes;
+        }
+
+        // ---------- 提取并下载 ----------
+        function handleExtract() {
+            const file = fileInput.files[0];
+            if (!file) {
+                status.textContent = '⚠️ 请先选择 MP3 文件';
+                return;
+            }
+
+            status.textContent = '⏳ 读取文件...';
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                try {
+                    const bytes = extractFromMP3(e.target.result);
+                    status.textContent = '✅ 提取成功，准备下载';
+                    appendLog('📦 还原数据: ' + (bytes.length / 1024).toFixed(1) + ' KB');
+
+                    // 推断文件扩展名
+                    let ext = '.bin';
+                    if (bytes.length > 4) {
+                        const sig = bytes.slice(0, 4);
+                        if (sig[0] === 37 && sig[1] === 80 && sig[2] === 68 && sig[3] === 70) ext = '.pdf';
+                        else if (sig[0] === 80 && sig[1] === 75) ext = '.zip';
+                        else if (sig[0] === 137 && sig[1] === 80 && sig[2] === 78 && sig[3] === 71) ext = '.png';
+                        else if (sig[0] === 255 && sig[1] === 216 && sig[2] === 255) ext = '.jpg';
+                        else if (sig[0] === 71 && sig[1] === 73 && sig[2] === 70) ext = '.gif';
+                        else if (sig[0] === 0x1F && sig[1] === 0x8B) ext = '.gz';
+                    }
+
+                    const blob = new Blob([bytes]);
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'restored' + ext;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(() => URL.revokeObjectURL(url), 5000);
+                    status.textContent = '✅ 下载已开始';
+                } catch (err) {
+                    status.textContent = '❌ ' + err.message;
+                    appendLog('❌ 错误: ' + err.message);
+                }
+            };
+
+            reader.onerror = function() {
+                status.textContent = '❌ 读取文件失败';
+            };
+
+            reader.readAsArrayBuffer(file);
+        }
+
+        extractBtn.addEventListener('click', handleExtract);
+        appendLog('🔧 MP3 提取器已加载');
+        status.textContent = '✅ 就绪';
+    })();
+</script>
+</body>
+</html>
