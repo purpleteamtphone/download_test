@@ -2,7 +2,6 @@
   "type": "ts-xor",
   "xor_key": 90,
   "part_count": 1,
-  "playlist": "playlist.m3u8",
   "files": [
     "segment_00000.ts"
   ]
