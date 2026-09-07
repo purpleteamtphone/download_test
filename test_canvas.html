@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<body>
+<h2>Canvas Steganography Test</h2>
+<button onclick="encodeAndDisplay()">編碼並顯示</button>
+<canvas id="stego" style="border:1px solid #ccc;"></canvas>
+<div id="log"></div>
+
+<script>
+const log = (msg) => {
+  document.getElementById('log').innerHTML += msg + '<br>';
+};
+
+async function encodeAndDisplay() {
+  const resp = await fetch('./7z2602-x64.exe');
+  const buffer = await resp.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  log(`原始檔案: ${bytes.length} bytes`);
+
+  // 計算所需 Canvas 大小（每像素 3 bytes，使用 RGB 的 LSB）
+  const pixelsNeeded = Math.ceil(bytes.length / 3);
+  const width = 2048;
+  const height = Math.ceil(pixelsNeeded / width);
+  log(`Canvas 尺寸: ${width}x${height}`);
+
+  const canvas = document.getElementById('stego');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  // 建立隨機背景（模擬正常圖片）
+  const imageData = ctx.createImageData(width, height);
+  const pixels = imageData.data;
+
+  // 填入隨機背景色
+  for (let i = 0; i < pixels.length; i += 4) {
+    pixels[i]     = Math.floor(Math.random() * 256); // R
+    pixels[i + 1] = Math.floor(Math.random() * 256); // G
+    pixels[i + 2] = Math.floor(Math.random() * 256); // B
+    pixels[i + 3] = 255; // A
+  }
+
+  // 將檔案 byte 嵌入 RGB 的最低有效位元 (LSB)
+  for (let i = 0; i < bytes.length; i++) {
+    const pixelIndex = i * 4;
+    // 每個 byte 拆成 3 個 bit 嵌入 R, G, B 的 LSB
+    // 簡化版：每像素存 1 byte（使用 R 通道）
+    pixels[pixelIndex] = (pixels[pixelIndex] & 0xFE) | (bytes[i] & 0x01);
+    pixels[pixelIndex + 1] = (pixels[pixelIndex + 1] & 0xFE) | ((bytes[i] >> 1) & 0x01);
+    pixels[pixelIndex + 2] = (pixels[pixelIndex + 2] & 0xFE) | ((bytes[i] >> 2) & 0x01);
+    // ... 完整實作需要 8 個 bit 分散到多個像素
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  log('✅ 資料已編碼至 Canvas，等待 Menlo 同步到本地...');
+
+  // 將 metadata 存入 DOM（小量資料，不易被截斷）
+  window.__stegoMeta = { width, height, fileSize: bytes.length };
+  document.title = `STEGO:${width}:${height}:${bytes.length}`;
+}
+</script>
+</body>
+</html>

