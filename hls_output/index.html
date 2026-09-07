@@ -2,113 +2,101 @@
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>HLS XOR 加密流播放器</title>
+    <title>HLS XOR 加密串流</title>
     <style>
-        body { font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; background: #1a1a1a; color: #ccc; }
-        h1 { margin: 20px; }
-        video { width: 80%; max-width: 800px; background: #000; border-radius: 8px; box-shadow: 0 0 30px rgba(0,0,0,0.8); }
-        .info { margin-top: 20px; padding: 10px; background: #2a2a2a; border-radius: 4px; }
+        body { font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; background: #1a1a1a; color: #ccc; padding: 20px; }
+        h1 { margin: 20px; color: #fff; }
+        video { width: 80%; max-width: 800px; background: #000; border-radius: 8px; }
+        .info { margin-top: 20px; padding: 15px; background: #2a2a2a; border-radius: 4px; max-width: 600px; text-align: center; }
+        .btn { padding: 12px 24px; margin-top: 15px; font-size: 16px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 4px; }
+        .btn:hover { background: #45a049; }
+        .key { color: #ffd700; font-weight: bold; }
         .error { color: #ff6b6b; }
     </style>
 </head>
 <body>
-    <h1>🎬 HLS 加密流 (XOR Key: 0x5a)</h1>
+    <h1>🎬 HLS 加密串流</h1>
     <video id="video" controls autoplay muted playsinline></video>
-    <div class="info" id="info">加载中...</div>
+    <div class="info" id="info">
+        🔑 XOR 金鑰: <span class="key">0x5a</span>
+        <br>📦 共 1 個分片
+        <br><span style="color:#888;font-size:14px;">💡 使用下方 Bookmarklet 還原下載</span>
+    </div>
+    <button class="btn" id="downloadBtn">📥 下載並還原原始檔案</button>
 
-    <!-- 使用标准 HLS 播放器库 -->
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@0.14.17"></script>
     <script>
-        (function() {
-            const video = document.getElementById('video');
+        document.getElementById('downloadBtn').addEventListener('click', async function() {
             const info = document.getElementById('info');
-            const playlistUrl = './playlist.m3u8'; // 指向同目录下的播放列表
-
-            // 由于我们的TS流是XOR加密的，标准HLS.js无法直接解密。
-            // 解决方案：通过Service Worker或在此处使用fetch拦截并解密。
-            // 但为了简化并保持标准HLS流程，我们在此处演示两种方式：
-            // 方法1 (推荐): 修改hls.js加载TS时的响应，通过自定义加载器解密。
-            // 方法2 (演示): 直接加载播放列表，但播放会失败(因为TS被加密)。
-            // 这里提供一个概念验证：如果XOR_KEY为0，则为未加密，直接播放。
-
-            if (90 === 0) {
-                // 未加密，直接使用标准hls.js
-                if (Hls.isSupported()) {
-                    const hls = new Hls();
-                    hls.loadSource(playlistUrl);
-                    hls.attachMedia(video);
-                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                        info.innerHTML = '✅ 播放中 (未加密)';
-                    });
-                    hls.on(Hls.Events.ERROR, (e, data) => {
-                        info.innerHTML = `❌ 播放错误: ${data.details}`;
-                    });
-                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                    video.src = playlistUrl;
-                }
-            } else {
-                // 加密模式: 显示提示并提供一个备用方案
-                // 注意: 要真正播放加密流，需要拦截TS数据并进行XOR解密。
-                // 这可以通过注册Service Worker或重写Hls.js的加载器来实现。
-                // 由于实现复杂，此演示页面提供下载还原文件的功能。
-                info.innerHTML = `🔒 此流已使用XOR加密 (密钥: 0x5a)。<br>
-                标准HLS播放器无法直接解密。请使用下方的“下载并还原”功能获取原始文件。`;
+            info.innerHTML = '⏳ 正在下載並還原...';
+            try {
+                const baseUrl = './';
+                const resp = await fetch(baseUrl + 'manifest.json');
+                if (!resp.ok) throw new Error('無法獲取 manifest');
+                const manifest = await resp.json();
                 
-                // 创建一个下载按钮来还原原始文件
-                const downloadBtn = document.createElement('button');
-                downloadBtn.textContent = '📥 下载并还原原始文件';
-                downloadBtn.style.padding = '12px 24px';
-                downloadBtn.style.marginTop = '20px';
-                downloadBtn.style.fontSize = '16px';
-                downloadBtn.style.cursor = 'pointer';
-                downloadBtn.onclick = async function() {
-                    info.innerHTML = '⏳ 正在下载并还原...';
-                    try {
-                        const baseUrl = './';
-                        const resp = await fetch(baseUrl + 'playlist.m3u8');
-                        const text = await resp.text();
-                        const segmentFiles = text.split('\n')
-                            .filter(l => l.trim().endsWith('.ts'))
-                            .map(l => l.trim());
-                        const chunks = [];
-                        for (const seg of segmentFiles) {
-                            const segResp = await fetch(baseUrl + seg);
-                            const segBuf = await segResp.arrayBuffer();
-                            chunks.push(new Uint8Array(segBuf));
-                        }
-                        // 合并并解密
-                        const totalLen = chunks.reduce((sum, arr) => sum + arr.length, 0);
-                        const full = new Uint8Array(totalLen);
-                        let offset = 0;
-                        for (const chunk of chunks) {
-                            full.set(chunk, offset);
-                            offset += chunk.length;
-                        }
-                        // XOR 解密 (注意: 这里解密的是TS流，不是原始数据)
-                        // 实际还原需要先解TS封包再解密数据载荷，为简化，此处演示仅做XOR还原原始数据流
-                        // 但正确的还原需要移除TS封装头。此功能在原始bookmarklet中已实现。
-                        // 此处只做概念演示。
-                        for (let i = 0; i < full.length; i++) {
-                            full[i] = full[i] ^ 90;
-                        }
-                        // 保存为文件
-                        const blob = new Blob([full]);
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = 'restored.bin';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                        info.innerHTML = '✅ 文件已还原并下载！';
-                    } catch (e) {
-                        info.innerHTML = `❌ 还原失败: ${e.message}`;
+                const chunks = [];
+                for (const f of manifest.files) {
+                    const segResp = await fetch(baseUrl + f);
+                    if (!segResp.ok) throw new Error('下載失敗: ' + f);
+                    const segBuf = await segResp.arrayBuffer();
+                    chunks.push(new Uint8Array(segBuf));
+                }
+
+                // 合併所有分片
+                const totalLen = chunks.reduce((sum, arr) => sum + arr.length, 0);
+                const full = new Uint8Array(totalLen);
+                let offset = 0;
+                for (const chunk of chunks) {
+                    full.set(chunk, offset);
+                    offset += chunk.length;
+                }
+
+                // 解密 TS 封包 payload
+                const decrypted = new Uint8Array(full.length);
+                let writeOffset = 0;
+                for (let i = 0; i < full.length; i += 188) {
+                    const packet = full.slice(i, i + 188);
+                    if (packet.length < 188) break;
+                    const header = packet.slice(0, 4);
+                    const payload = packet.slice(4);
+                    for (let j = 0; j < payload.length; j++) {
+                        payload[j] = payload[j] ^ manifest.xor_key;
                     }
-                };
-                document.body.appendChild(downloadBtn);
+                    decrypted.set(payload, writeOffset);
+                    writeOffset += payload.length;
+                }
+
+                // 裁切掉多餘的 padding (最後一個封包可能有 0xff 填充)
+                let dataEnd = writeOffset;
+                while (dataEnd > 0 && decrypted[dataEnd - 1] === 0xff) {
+                    dataEnd--;
+                }
+                const finalData = decrypted.slice(0, dataEnd);
+
+                // 判斷檔案類型
+                let ext = '.bin';
+                if (finalData.length > 4) {
+                    if (finalData[0] === 0x25 && finalData[1] === 0x50 && finalData[2] === 0x44 && finalData[3] === 0x46) ext = '.pdf';
+                    else if (finalData[0] === 0x50 && finalData[1] === 0x4B) ext = '.zip';
+                    else if (finalData[0] === 0x89 && finalData[1] === 0x50 && finalData[2] === 0x4E && finalData[3] === 0x47) ext = '.png';
+                    else if (finalData[0] === 0xFF && finalData[1] === 0xD8 && finalData[2] === 0xFF) ext = '.jpg';
+                    else if (finalData[0] === 0x25 && finalData[1] === 0x21) ext = '.ps';
+                }
+
+                const blob = new Blob([finalData]);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'restored' + ext;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                info.innerHTML = '✅ 還原成功！檔案已下載';
+            } catch (e) {
+                info.innerHTML = '❌ 還原失敗: ' + e.message;
             }
-        })();
+        });
     </script>
 </body>
 </html>
