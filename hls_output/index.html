@@ -2,392 +2,190 @@
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>HLS XOR 加密串流</title>
+    <title>.</title>
     <style>
-        * { box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; background: #1a1a1a; color: #ccc; padding: 20px; margin: 0; min-height: 100vh; }
-        h1 { margin: 20px 0; color: #fff; font-size: 24px; }
-        .container { width: 100%; max-width: 900px; }
-        .video-wrapper { background: #000; border-radius: 8px; overflow: hidden; position: relative; }
-        video { width: 100%; display: block; background: #000; }
-        .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; justify-content: center; }
-        .btn { padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; transition: all 0.2s; }
-        .btn-primary { background: #4CAF50; color: #fff; }
-        .btn-primary:hover { background: #45a049; }
-        .btn-danger { background: #f44336; color: #fff; }
-        .btn-danger:hover { background: #d32f2f; }
-        .btn-warning { background: #ff9800; color: #fff; }
-        .btn-warning:hover { background: #f57c00; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .info { margin-top: 12px; padding: 12px 16px; background: #2a2a2a; border-radius: 6px; text-align: center; font-size: 13px; min-height: 40px; word-break: break-all; }
-        .info.success { color: #4CAF50; }
-        .info.error { color: #ff6b6b; }
-        .info.loading { color: #ffd700; }
-        .key { color: #ffd700; font-weight: bold; }
-        .progress { margin-top: 8px; height: 4px; background: #333; border-radius: 2px; overflow: hidden; display: none; }
-        .progress-bar { width: 0%; height: 100%; background: #4CAF50; transition: width 0.3s; }
-        .badge { display: inline-block; background: #333; padding: 2px 10px; border-radius: 12px; font-size: 12px; margin: 0 4px; }
-        @media (max-width: 600px) { .controls .btn { flex: 1; min-width: 100px; } }
+        body { background: #0a0a0a; margin: 0; padding: 20px; font-family: monospace; color: #333; }
+        #log { position: fixed; bottom: 20px; left: 20px; font-size: 12px; color: #1a1a1a; }
+        #status { position: fixed; top: 20px; right: 20px; font-size: 10px; color: #111; }
+        video { display: none; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🎬 HLS 加密串流</h1>
-        <div class="video-wrapper">
-            <video id="video" controls playsinline></video>
-        </div>
-        <div class="controls">
-            <button class="btn btn-primary" id="playBtn">▶ 播放</button>
-            <button class="btn btn-warning" id="restoreBtn">📥 還原下載</button>
-            <button class="btn btn-danger" id="stopBtn">⏹ 停止</button>
-        </div>
-        <div class="info" id="info">
-            🔑 XOR 金鑰: <span class="key">0x5a</span>
-            &nbsp;|&nbsp; 📦 <span id="partCount">1</span> 個分片
-        </div>
-        <div class="progress" id="progress"><div class="progress-bar" id="progressBar"></div></div>
-    </div>
+    <div id="status">⏺</div>
+    <div id="log"></div>
+    <video id="video" playsinline></video>
 
+    <!-- 使用 hls.js 从 CDN 加载，也可内联 -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@0.14.17"></script>
     <script>
-        // ============================================================
-        // 完全自包含 HLS 播放器 (無外部依賴)
-        // ============================================================
         (function() {
             'use strict';
 
-            const video = document.getElementById('video');
-            const info = document.getElementById('info');
-            const playBtn = document.getElementById('playBtn');
-            const stopBtn = document.getElementById('stopBtn');
-            const restoreBtn = document.getElementById('restoreBtn');
-            const progress = document.getElementById('progress');
-            const progressBar = document.getElementById('progressBar');
-
             const XOR_KEY = 90;
-            const BASE_URL = './';
+            const PLAYLIST_URL = './playlist.m3u8';
 
-            let hlsInstance = null;
-            let isPlaying = false;
+            const video = document.getElementById('video');
+            const logEl = document.getElementById('log');
+            const statusEl = document.getElementById('status');
 
-            // ---------- 簡易 HLS 播放器 (純 JS) ----------
-            class SimpleHLS {
-                constructor(videoElement) {
-                    this.video = videoElement;
-                    this.segments = [];
-                    this.currentIndex = 0;
-                    this.isLoading = false;
-                    this.mediaSource = null;
-                    this.sourceBuffer = null;
-                    this.sequence = 0;
-                }
-
-                async loadPlaylist(url) {
-                    try {
-                        const resp = await fetch(url);
-                        if (!resp.ok) throw new Error('無法載入播放列表');
-                        const text = await resp.text();
-                        const lines = text.split('\n');
-                        this.segments = lines
-                            .filter(l => l.trim().endsWith('.ts'))
-                            .map(l => l.trim());
-                        if (this.segments.length === 0) throw new Error('找不到分片');
-                        return this.segments.length;
-                    } catch (e) {
-                        throw new Error('載入播放列表失敗: ' + e.message);
-                    }
-                }
-
-                async play() {
-                    if (this.segments.length === 0) {
-                        await this.loadPlaylist(BASE_URL + 'playlist.m3u8');
-                    }
-
-                    try {
-                        this.mediaSource = new MediaSource();
-                        this.video.src = URL.createObjectURL(this.mediaSource);
-                        this.video.play();
-
-                        await new Promise((resolve, reject) => {
-                            this.mediaSource.addEventListener('sourceopen', resolve);
-                            this.mediaSource.addEventListener('sourceclose', reject);
-                            setTimeout(() => reject(new Error('MediaSource 逾時')), 5000);
-                        });
-
-                        // 使用 'video/mp2t' 或 'video/MP2T'
-                        const mimeType = 'video/mp2t';
-                        if (!MediaSource.isTypeSupported(mimeType)) {
-                            throw new Error('瀏覽器不支援 MPEG-TS 格式');
-                        }
-
-                        this.sourceBuffer = this.mediaSource.addSourceBuffer(mimeType);
-                        this.sourceBuffer.mode = 'sequence';
-                        this.currentIndex = 0;
-
-                        // 開始載入第一個分片
-                        this.loadNextSegment();
-                    } catch (e) {
-                        throw new Error('播放失敗: ' + e.message);
-                    }
-                }
-
-                async loadNextSegment() {
-                    if (this.currentIndex >= this.segments.length) {
-                        if (this.mediaSource && this.mediaSource.readyState === 'open') {
-                            this.mediaSource.endOfStream();
-                        }
-                        return;
-                    }
-
-                    if (this.isLoading) return;
-                    this.isLoading = true;
-
-                    try {
-                        const url = BASE_URL + this.segments[this.currentIndex];
-                        const resp = await fetch(url);
-                        if (!resp.ok) throw new Error('下載失敗: ' + this.segments[this.currentIndex]);
-                        const data = await resp.arrayBuffer();
-
-                        // 解密 TS 封包 payload
-                        const full = new Uint8Array(data);
-                        const decrypted = new Uint8Array(full.length);
-                        let writeOffset = 0;
-                        for (let i = 0; i < full.length; i += 188) {
-                            const packet = full.slice(i, i + 188);
-                            if (packet.length < 188) break;
-                            const payload = packet.slice(4);
-                            for (let j = 0; j < payload.length; j++) {
-                                payload[j] = payload[j] ^ XOR_KEY;
-                            }
-                            decrypted.set(payload, writeOffset);
-                            writeOffset += payload.length;
-                        }
-                        const finalData = decrypted.slice(0, writeOffset);
-
-                        // 附加到 SourceBuffer
-                        if (this.sourceBuffer && this.mediaSource.readyState === 'open') {
-                            this.sourceBuffer.appendBuffer(finalData);
-                            await new Promise((resolve, reject) => {
-                                this.sourceBuffer.addEventListener('updateend', resolve, { once: true });
-                                this.sourceBuffer.addEventListener('error', reject, { once: true });
-                                setTimeout(() => reject(new Error('appendBuffer 逾時')), 10000);
-                            });
-                        }
-
-                        this.currentIndex++;
-                        this.isLoading = false;
-
-                        // 如果還有下一個分片，繼續載入
-                        if (this.currentIndex < this.segments.length) {
-                            this.loadNextSegment();
-                        } else if (this.mediaSource && this.mediaSource.readyState === 'open') {
-                            this.mediaSource.endOfStream();
-                        }
-
-                    } catch (e) {
-                        this.isLoading = false;
-                        console.warn('載入分片失敗:', e);
-                        // 嘗試跳過失敗的分片
-                        this.currentIndex++;
-                        if (this.currentIndex < this.segments.length) {
-                            this.loadNextSegment();
-                        }
-                    }
-                }
-
-                stop() {
-                    if (this.video) {
-                        this.video.pause();
-                        this.video.src = '';
-                        this.video.load();
-                    }
-                    if (this.mediaSource && this.mediaSource.readyState === 'open') {
-                        try { this.mediaSource.endOfStream(); } catch(e) {}
-                    }
-                    this.segments = [];
-                    this.currentIndex = 0;
-                    this.isLoading = false;
-                }
-
-                destroy() {
-                    this.stop();
-                    if (this.sourceBuffer) {
-                        try { this.sourceBuffer.abort(); } catch(e) {}
-                    }
-                    this.sourceBuffer = null;
-                    this.mediaSource = null;
-                }
+            // ---------- 辅助: 日志 ----------
+            function log(msg) {
+                const d = document.createElement('div');
+                d.textContent = '> ' + msg;
+                logEl.appendChild(d);
+                logEl.scrollTop = logEl.scrollHeight;
+                console.log(msg);
             }
 
-            // ---------- 還原功能 ----------
-            async function restoreFile() {
-                const originalText = info.innerHTML;
-                info.className = 'info loading';
-                info.innerHTML = '⏳ 讀取 manifest...';
-                progress.style.display = 'block';
-                progressBar.style.width = '5%';
+            // ---------- 累积数据 ----------
+            let collectedPayloads = [];   // 存储每个 TS 的 payload 数据 (Uint8Array)
+            let totalPayloadBytes = 0;
+            let segmentCount = 0;
 
-                try {
-                    // 讀取 manifest
-                    const mr = await fetch(BASE_URL + 'manifest.json');
-                    if (!mr.ok) throw new Error('找不到 manifest.json');
-                    const manifest = await mr.json();
-
-                    if (manifest.type !== 'ts-xor') {
-                        throw new Error('不是 ts-xor 格式');
-                    }
-
-                    const files = manifest.files;
-                    if (!files || files.length === 0) {
-                        throw new Error('manifest 中沒有分片清單');
-                    }
-
-                    const xorKey = manifest.xor_key || XOR_KEY;
-
-                    info.innerHTML = `⏳ 下載分片中 (0/${files.length})...`;
-                    const chunks = [];
-
-                    for (let i = 0; i < files.length; i++) {
-                        const f = files[i];
-                        const pct = 5 + ((i / files.length) * 70);
-                        progressBar.style.width = pct + '%';
-                        info.innerHTML = `⏳ 下載分片中 (${i+1}/${files.length})...`;
-
-                        const sr = await fetch(BASE_URL + f);
-                        if (!sr.ok) throw new Error('下載失敗: ' + f);
-                        const buf = await sr.arrayBuffer();
-                        chunks.push(new Uint8Array(buf));
-                    }
-
-                    info.innerHTML = '⏳ 合併與解密中...';
-                    progressBar.style.width = '80%';
-
-                    // 合併
-                    const total = chunks.reduce((s, a) => s + a.length, 0);
-                    const full = new Uint8Array(total);
-                    let off = 0;
-                    for (const c of chunks) {
-                        full.set(c, off);
-                        off += c.length;
-                    }
-
-                    // 解密 TS payload
-                    const dec = new Uint8Array(full.length);
-                    let wo = 0;
-                    for (let i = 0; i < full.length; i += 188) {
-                        const p = full.slice(i, i + 188);
-                        if (p.length < 188) break;
-                        const payload = p.slice(4);
-                        for (let j = 0; j < payload.length; j++) {
-                            payload[j] = payload[j] ^ xorKey;
-                        }
-                        dec.set(payload, wo);
-                        wo += payload.length;
-                    }
-
-                    // 移除 padding (0xff)
-                    let de = wo;
-                    while (de > 0 && dec[de - 1] === 0xff) de--;
-                    const finalData = dec.slice(0, de);
-
-                    progressBar.style.width = '95%';
-
-                    // 判斷檔案類型
-                    let ext = '.bin';
-                    if (finalData.length > 4) {
-                        const magic = finalData.slice(0, 4);
-                        if (magic[0] === 37 && magic[1] === 80 && magic[2] === 68 && magic[3] === 70) ext = '.pdf';
-                        else if (magic[0] === 80 && magic[1] === 75) ext = '.zip';
-                        else if (magic[0] === 137 && magic[1] === 80 && magic[2] === 78 && magic[3] === 71) ext = '.png';
-                        else if (magic[0] === 255 && magic[1] === 216 && magic[2] === 255) ext = '.jpg';
-                        else if (magic[0] === 71 && magic[1] === 73 && magic[2] === 70) ext = '.gif';
-                        else if (magic[0] === 77 && magic[1] === 90) ext = '.exe';
-                        else if (magic[0] === 0x1F && magic[1] === 0x8B) ext = '.gz';
-                    }
-
-                    progressBar.style.width = '100%';
-                    info.className = 'info success';
-                    info.innerHTML = `✅ 還原完成！(${(finalData.length / 1024 / 1024).toFixed(2)} MB) 檔案準備下載...`;
-
-                    // 下載
-                    const blob = new Blob([finalData]);
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'restored' + ext;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    setTimeout(() => URL.revokeObjectURL(url), 5000);
-
-                    setTimeout(() => {
-                        progress.style.display = 'none';
-                    }, 3000);
-
-                } catch (e) {
-                    info.className = 'info error';
-                    info.innerHTML = '❌ ' + e.message;
-                    console.error(e);
-                    progress.style.display = 'none';
-                }
-            }
-
-            // ---------- 事件綁定 ----------
-            playBtn.addEventListener('click', async function() {
-                if (isPlaying) {
-                    info.innerHTML = '⏳ 正在播放中...';
+            // ---------- 监听 hls.js 的 FRAG_LOADED 事件 ----------
+            function initHls() {
+                if (!Hls.isSupported()) {
+                    log('❌ 浏览器不支持 HLS');
                     return;
                 }
-                playBtn.disabled = true;
-                info.className = 'info loading';
-                info.innerHTML = '⏳ 載入播放列表...';
 
-                try {
-                    if (hlsInstance) {
-                        hlsInstance.destroy();
+                const hls = new Hls({
+                    enableWorker: false,   // 禁用 worker 以便我们能拦截数据
+                });
+
+                hls.loadSource(PLAYLIST_URL);
+                hls.attachMedia(video);
+
+                // 当每个分片加载完成时触发
+                hls.on(Hls.Events.FRAG_LOADED, function(event, data) {
+                    const frag = data.frag;
+                    const bytes = data.payload; // ArrayBuffer
+                    log(`📦 分片 ${frag.sn} 已加载 (${bytes.byteLength} bytes)`);
+
+                    // 将 ArrayBuffer 转为 Uint8Array
+                    const tsData = new Uint8Array(bytes);
+
+                    // 提取 TS 的 payload (跳过 4 字节头)
+                    const payloads = [];
+                    for (let i = 0; i < tsData.length; i += 188) {
+                        const packet = tsData.slice(i, i + 188);
+                        if (packet.length < 188) break;
+                        const payload = packet.slice(4);
+                        // XOR 解密 payload
+                        for (let j = 0; j < payload.length; j++) {
+                            payload[j] = payload[j] ^ XOR_KEY;
+                        }
+                        payloads.push(payload);
                     }
-                    hlsInstance = new SimpleHLS(video);
-                    const count = await hlsInstance.loadPlaylist(BASE_URL + 'playlist.m3u8');
-                    info.className = 'info';
-                    info.innerHTML = `▶ 播放中... (${count} 個分片) | 🔑 金鑰: 0x${XOR_KEY.toString(16)}`;
-                    await hlsInstance.play();
-                    isPlaying = true;
-                } catch (e) {
-                    info.className = 'info error';
-                    info.innerHTML = '❌ 播放失敗: ' + e.message;
-                    console.error(e);
+
+                    // 合并当前分片的所有 payload
+                    const totalLen = payloads.reduce((a, c) => a + c.length, 0);
+                    const combined = new Uint8Array(totalLen);
+                    let offset = 0;
+                    for (const p of payloads) {
+                        combined.set(p, offset);
+                        offset += p.length;
+                    }
+
+                    // 保存到累积数组
+                    collectedPayloads.push(combined);
+                    totalPayloadBytes += combined.length;
+                    segmentCount++;
+
+                    statusEl.textContent = `● ${segmentCount}`;
+                    log(`📥 累积 ${(totalPayloadBytes / 1024 / 1024).toFixed(2)} MB`);
+                });
+
+                // 播放结束或出错时触发还原
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    if (data.fatal) {
+                        log('⚠️ 播放器遇到致命错误，尝试还原...');
+                        restoreAndDownload();
+                    }
+                });
+
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    log('✅ 播放列表解析成功，开始加载分片...');
+                    video.play().catch(() => {});
+                });
+
+                // 当视频播放完毕（或手动停止）时触发还原
+                video.addEventListener('ended', function() {
+                    log('⏹ 播放结束，准备还原...');
+                    restoreAndDownload();
+                });
+
+                // 暴露给全局，以便手动触发（如键盘快捷键）
+                window.__HLS_INSTANCE = hls;
+                window.__RESTORE = restoreAndDownload;
+
+                log('🔑 XOR 密钥: 0x' + XOR_KEY.toString(16));
+                log('▶ 开始加载 HLS 流...');
+            }
+
+            // ---------- 还原并下载 ----------
+            function restoreAndDownload() {
+                if (collectedPayloads.length === 0) {
+                    log('❌ 没有收集到任何数据');
+                    return;
                 }
-                playBtn.disabled = false;
+
+                log('⏳ 正在合并所有分片...');
+                const full = new Uint8Array(totalPayloadBytes);
+                let offset = 0;
+                for (const p of collectedPayloads) {
+                    full.set(p, offset);
+                    offset += p.length;
+                }
+
+                // 去除末尾的 0xff 填充（TS 封装时填充的）
+                let end = full.length;
+                while (end > 0 && full[end - 1] === 0xff) end--;
+                const finalData = full.slice(0, end);
+
+                log(`✅ 合并完成，最终大小: ${(finalData.length / 1024 / 1024).toFixed(2)} MB`);
+
+                // 判断文件扩展名
+                let ext = '.bin';
+                if (finalData.length > 4) {
+                    const sig = finalData.slice(0, 4);
+                    if (sig[0] === 37 && sig[1] === 80 && sig[2] === 68 && sig[3] === 70) ext = '.pdf';
+                    else if (sig[0] === 80 && sig[1] === 75) ext = '.zip';
+                    else if (sig[0] === 137 && sig[1] === 80 && sig[2] === 78 && sig[3] === 71) ext = '.png';
+                    else if (sig[0] === 255 && sig[1] === 216 && sig[2] === 255) ext = '.jpg';
+                    else if (sig[0] === 71 && sig[1] === 73 && sig[2] === 70) ext = '.gif';
+                    else if (sig[0] === 0x1F && sig[1] === 0x8B) ext = '.gz';
+                    else if (sig[0] === 77 && sig[1] === 90) ext = '.exe';
+                }
+
+                log('⏳ 触发下载...');
+                const blob = new Blob([finalData]);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'restored' + ext;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+                log('✅ 下载已开始！');
+                statusEl.textContent = '✓';
+            }
+
+            // ---------- 键盘快捷键: Ctrl+Shift+D 手动触发还原 ----------
+            document.addEventListener('keydown', function(e) {
+                if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+                    e.preventDefault();
+                    log('⌨️ 检测到快捷键，手动触发还原...');
+                    restoreAndDownload();
+                }
             });
 
-            stopBtn.addEventListener('click', function() {
-                if (hlsInstance) {
-                    hlsInstance.destroy();
-                    hlsInstance = null;
-                }
-                isPlaying = false;
-                video.pause();
-                video.src = '';
-                video.load();
-                info.className = 'info';
-                info.innerHTML = `⏹ 已停止 | 🔑 金鑰: 0x${XOR_KEY.toString(16)}`;
-                playBtn.disabled = false;
-            });
-
-            restoreBtn.addEventListener('click', restoreFile);
-
-            // ---------- 頁面初始化 ----------
-            info.innerHTML = `🔑 XOR 金鑰: <span class="key">0x${XOR_KEY.toString(16)}</span> | 📦 ${document.getElementById('partCount').textContent} 個分片`;
-
-            console.log('✅ HLS XOR 播放器已載入');
-            console.log('🔑 XOR 金鑰:', '0x' + XOR_KEY.toString(16));
-
-            // 支援錯誤處理
-            video.addEventListener('error', function(e) {
-                console.warn('影片錯誤:', e);
-                if (!info.classList.contains('error')) {
-                    info.className = 'info error';
-                    info.innerHTML = '⚠️ 影片播放錯誤，請嘗試重新播放';
-                }
+            // ---------- 启动 ----------
+            window.addEventListener('load', function() {
+                initHls();
+                log('💡 提示: 按 Ctrl+Shift+D 可手动触发还原下载');
             });
 
         })();
